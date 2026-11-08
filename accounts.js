@@ -13,7 +13,7 @@ const LOCK_MINUTE = 0;
 const UNLOCK_HOUR = 4;
 const UNLOCK_MINUTE = 0;
 
-const REMOVE_PASSWORD = process.env.REMOVE_PASSWORD || '1234';
+const REMOVE_PASSWORD = '1234';
 const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
 const TIMEZONE = 'Africa/Lusaka';
 
@@ -32,18 +32,9 @@ async function initDB() {
         );
     `);
 
-    await pool.query(`
-        ALTER TABLE accounts
-        ADD COLUMN IF NOT EXISTS in_use_since BIGINT DEFAULT NULL;
-    `);
-    await pool.query(`
-        ALTER TABLE accounts
-        ADD COLUMN IF NOT EXISTS tab_id TEXT DEFAULT NULL;
-    `);
-    await pool.query(`
-        ALTER TABLE accounts
-        ADD COLUMN IF NOT EXISTS freed_at BIGINT DEFAULT NULL;
-    `);
+    await pool.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS in_use_since BIGINT DEFAULT NULL;`);
+    await pool.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS tab_id TEXT DEFAULT NULL;`);
+    await pool.query(`ALTER TABLE accounts ADD COLUMN IF NOT EXISTS freed_at BIGINT DEFAULT NULL;`);
 
     await pool.query(`
         CREATE TABLE IF NOT EXISTS alerts (
@@ -64,66 +55,7 @@ async function initDB() {
         );
     `);
 
-    // Keep the old tables intact so existing database data is not deleted.
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS gsb_accounts (
-            phone TEXT PRIMARY KEY,
-            password TEXT NOT NULL,
-            status TEXT DEFAULT 'FREE',
-            logout_time BIGINT DEFAULT NULL,
-            logout_time_str TEXT DEFAULT NULL,
-            last_heartbeat BIGINT DEFAULT NULL,
-            in_use_since BIGINT DEFAULT NULL,
-            tab_id TEXT DEFAULT NULL,
-            freed_at BIGINT DEFAULT NULL
-        );
-    `);
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS gsb_alerts (
-            id SERIAL PRIMARY KEY,
-            tab_id TEXT,
-            amount NUMERIC DEFAULT 0,
-            timestamp BIGINT,
-            created_at TIMESTAMP DEFAULT NOW()
-        );
-    `);
-
-    await pool.query(`
-        CREATE TABLE IF NOT EXISTS gsb_bad_password_accounts (
-            phone TEXT PRIMARY KEY,
-            password TEXT,
-            reported_at TEXT,
-            status TEXT DEFAULT 'BAD_PASSWORD'
-        );
-    `);
-
-    // Merge old GSB accounts into the single HOTGAMES account pool.
-    // If a phone number already exists in accounts, its existing row wins.
-    await pool.query(`
-        INSERT INTO accounts (
-            phone, password, status, logout_time, logout_time_str,
-            last_heartbeat, in_use_since, tab_id, freed_at
-        )
-        SELECT
-            phone, password, status, logout_time, logout_time_str,
-            last_heartbeat, in_use_since, tab_id, freed_at
-        FROM gsb_accounts
-        ON CONFLICT (phone) DO NOTHING;
-    `);
-
-    await pool.query(`
-        INSERT INTO bad_password_accounts (
-            phone, password, reported_at, status
-        )
-        SELECT phone, password, reported_at, status
-        FROM gsb_bad_password_accounts
-        ON CONFLICT (phone) DO NOTHING;
-    `);
-
-    const { rowCount } = await pool.query(
-        'SELECT 1 FROM accounts LIMIT 1'
-    );
+    const { rowCount } = await pool.query('SELECT 1 FROM accounts LIMIT 1');
 
     if (rowCount === 0) {
         const phoneList = [];
@@ -131,31 +63,24 @@ async function initDB() {
         const placeholders = [];
 
         phoneList.forEach(([phone, password], i) => {
-            placeholders.push(
-                `($${i * 2 + 1}, $${i * 2 + 2})`
-            );
+            placeholders.push(`($${i * 2 + 1}, $${i * 2 + 2})`);
             values.push(phone, password);
         });
 
         if (placeholders.length > 0) {
             await pool.query(
-                `INSERT INTO accounts (phone, password)
-                 VALUES ${placeholders.join(', ')}
-                 ON CONFLICT DO NOTHING`,
+                `INSERT INTO accounts (phone, password) VALUES ${placeholders.join(', ')} ON CONFLICT DO NOTHING`,
                 values
             );
         }
 
-        console.log('HOTGAMES accounts seeded into database.');
+        console.log('Accounts seeded into database.');
     }
 }
 
-// One combined HOTGAMES account store.
 function makeStore(T, B) {
     async function getAccounts() {
-        const { rows } = await pool.query(
-            `SELECT * FROM ${T} ORDER BY phone ASC`
-        );
+        const { rows } = await pool.query(`SELECT * FROM ${T} ORDER BY phone ASC`);
 
         return rows.map(r => ({
             phone: r.phone,
@@ -163,10 +88,8 @@ function makeStore(T, B) {
             status: r.status,
             logoutTime: r.logout_time ? Number(r.logout_time) : null,
             logoutTimeStr: r.logout_time_str,
-            lastHeartbeat: r.last_heartbeat
-                ? Number(r.last_heartbeat) : null,
-            inUseSince: r.in_use_since
-                ? Number(r.in_use_since) : null,
+            lastHeartbeat: r.last_heartbeat ? Number(r.last_heartbeat) : null,
+            inUseSince: r.in_use_since ? Number(r.in_use_since) : null,
             tabId: r.tab_id || null,
             freedAt: r.freed_at ? Number(r.freed_at) : null
         }));
@@ -190,13 +113,10 @@ function makeStore(T, B) {
             phone: r.phone,
             password: r.password,
             status: r.status,
-            logoutTime: r.logout_time
-                ? Number(r.logout_time) : null,
+            logoutTime: r.logout_time ? Number(r.logout_time) : null,
             logoutTimeStr: r.logout_time_str,
-            lastHeartbeat: r.last_heartbeat
-                ? Number(r.last_heartbeat) : null,
-            inUseSince: r.in_use_since
-                ? Number(r.in_use_since) : null,
+            lastHeartbeat: r.last_heartbeat ? Number(r.last_heartbeat) : null,
+            inUseSince: r.in_use_since ? Number(r.in_use_since) : null,
             tabId: r.tab_id || null,
             freedAt: r.freed_at ? Number(r.freed_at) : null
         };
@@ -228,11 +148,7 @@ function makeStore(T, B) {
                              in_use_since = NULL,
                              tab_id = NULL
                          WHERE phone = $1`,
-                        [
-                            oldRows[0].phone,
-                            heartbeatNow,
-                            logoutTimeStr + ' (re-login)'
-                        ]
+                        [oldRows[0].phone, heartbeatNow, logoutTimeStr + ' (re-login)']
                     );
                 }
             }
@@ -268,9 +184,11 @@ function makeStore(T, B) {
             await client.query('COMMIT');
 
             return { phone, password };
+
         } catch (e) {
             await client.query('ROLLBACK');
             throw e;
+
         } finally {
             client.release();
         }
@@ -314,9 +232,11 @@ function makeStore(T, B) {
             await client.query('COMMIT');
 
             return { phone, password };
+
         } catch (e) {
             await client.query('ROLLBACK');
             throw e;
+
         } finally {
             client.release();
         }
@@ -345,9 +265,7 @@ function makeStore(T, B) {
         const values = [...keys.map(k => fields[k]), phone];
 
         await pool.query(
-            `UPDATE ${T}
-             SET ${setClauses}
-             WHERE phone = $${values.length}`,
+            `UPDATE ${T} SET ${setClauses} WHERE phone = $${values.length}`,
             values
         );
     }
@@ -361,10 +279,7 @@ function makeStore(T, B) {
     }
 
     async function removeAccount(phone) {
-        await pool.query(
-            `DELETE FROM ${T} WHERE phone = $1`,
-            [phone]
-        );
+        await pool.query(`DELETE FROM ${T} WHERE phone = $1`, [phone]);
     }
 
     async function resetAllAccounts() {
@@ -375,8 +290,7 @@ function makeStore(T, B) {
                 logout_time_str = NULL,
                 last_heartbeat = NULL,
                 in_use_since = NULL,
-                tab_id = NULL,
-                freed_at = NULL
+                tab_id = NULL
         `);
     }
 
@@ -385,9 +299,7 @@ function makeStore(T, B) {
     }
 
     async function getBadPasswordAccounts() {
-        const { rows } = await pool.query(
-            `SELECT * FROM ${B}`
-        );
+        const { rows } = await pool.query(`SELECT * FROM ${B}`);
 
         return rows.map(r => ({
             phone: r.phone,
@@ -407,10 +319,7 @@ function makeStore(T, B) {
     }
 
     async function removeBadPasswordAccount(phone) {
-        await pool.query(
-            `DELETE FROM ${B} WHERE phone = $1`,
-            [phone]
-        );
+        await pool.query(`DELETE FROM ${B} WHERE phone = $1`, [phone]);
     }
 
     return {
@@ -429,18 +338,11 @@ function makeStore(T, B) {
     };
 }
 
-const hotgames = makeStore(
-    'accounts',
-    'bad_password_accounts'
-);
+const hotgames = makeStore('accounts', 'bad_password_accounts');
 
 function getZambiaTime() {
     const now = new Date();
-
-    const zambiaStr = now.toLocaleString('en-GB', {
-        timeZone: TIMEZONE
-    });
-
+    const zambiaStr = now.toLocaleString('en-GB', { timeZone: TIMEZONE });
     const [, timePart] = zambiaStr.split(', ');
     const [hours, minutes, seconds] = timePart.split(':').map(Number);
 
