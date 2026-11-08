@@ -6,13 +6,6 @@ const pool = new Pool({
 });
 
 const SEVEN_DAYS_MS = 7 * 24 * 60 * 60 * 1000;
-const FREE_ACCOUNT_LOCK_THRESHOLD = 50;
-
-const LOCK_HOUR = 20;
-const LOCK_MINUTE = 0;
-const UNLOCK_HOUR = 4;
-const UNLOCK_MINUTE = 0;
-
 const REMOVE_PASSWORD = '1234';
 const HEARTBEAT_TIMEOUT_MS = 5 * 60 * 1000;
 const TIMEZONE = 'Africa/Lusaka';
@@ -55,6 +48,55 @@ async function initDB() {
         );
     `);
 
+    // Migrate existing GSB accounts into the single HOTGAMES pool.
+    // Existing HOTGAMES phone records are never overwritten.
+    await pool.query(`
+        DO $$
+        BEGIN
+            IF to_regclass('public.gsb_accounts') IS NOT NULL THEN
+                INSERT INTO accounts (
+                    phone,
+                    password,
+                    status,
+                    logout_time,
+                    logout_time_str,
+                    last_heartbeat,
+                    in_use_since,
+                    tab_id,
+                    freed_at
+                )
+                SELECT
+                    phone,
+                    password,
+                    status,
+                    logout_time,
+                    logout_time_str,
+                    last_heartbeat,
+                    in_use_since,
+                    tab_id,
+                    freed_at
+                FROM gsb_accounts
+                ON CONFLICT (phone) DO NOTHING;
+            END IF;
+
+            IF to_regclass('public.gsb_bad_password_accounts') IS NOT NULL THEN
+                INSERT INTO bad_password_accounts (
+                    phone,
+                    password,
+                    reported_at,
+                    status
+                )
+                SELECT
+                    phone,
+                    password,
+                    reported_at,
+                    status
+                FROM gsb_bad_password_accounts
+                ON CONFLICT (phone) DO NOTHING;
+            END IF;
+        END $$;
+    `);
+
     const { rowCount } = await pool.query('SELECT 1 FROM accounts LIMIT 1');
 
     if (rowCount === 0) {
@@ -69,18 +111,24 @@ async function initDB() {
 
         if (placeholders.length > 0) {
             await pool.query(
-                `INSERT INTO accounts (phone, password) VALUES ${placeholders.join(', ')} ON CONFLICT DO NOTHING`,
+                `INSERT INTO accounts (phone, password)
+                 VALUES ${placeholders.join(', ')}
+                 ON CONFLICT DO NOTHING`,
                 values
             );
         }
 
-        console.log('Accounts seeded into database.');
+        console.log('HOTGAMES accounts initialized.');
     }
 }
 
+// One HOTGAMES account store.
 function makeStore(T, B) {
+
     async function getAccounts() {
-        const { rows } = await pool.query(`SELECT * FROM ${T} ORDER BY phone ASC`);
+        const { rows } = await pool.query(
+            `SELECT * FROM ${T} ORDER BY phone ASC`
+        );
 
         return rows.map(r => ({
             phone: r.phone,
@@ -122,6 +170,7 @@ function makeStore(T, B) {
         };
     }
 
+    // Move the previous account to waiting and claim another atomically.
     async function reLoginForTab(tabId, heartbeatNow, logoutTimeStr) {
         const client = await pool.connect();
 
@@ -148,13 +197,18 @@ function makeStore(T, B) {
                              in_use_since = NULL,
                              tab_id = NULL
                          WHERE phone = $1`,
-                        [oldRows[0].phone, heartbeatNow, logoutTimeStr + ' (re-login)']
+                        [
+                            oldRows[0].phone,
+                            heartbeatNow,
+                            logoutTimeStr + ' (re-login)'
+                        ]
                     );
                 }
             }
 
             const { rows: newRows } = await client.query(
-                `SELECT phone, password FROM ${T}
+                `SELECT phone, password
+                 FROM ${T}
                  WHERE status = 'FREE'
                  ORDER BY freed_at ASC NULLS LAST
                  LIMIT 1
@@ -194,6 +248,7 @@ function makeStore(T, B) {
         }
     }
 
+    // Claim one free account atomically.
     async function claimFreeAccount(heartbeatNow, tabId) {
         const client = await pool.connect();
 
@@ -258,14 +313,19 @@ function makeStore(T, B) {
         if (keys.length === 0) return;
 
         const setClauses = keys.map((k, i) => {
-            if (!map[k]) throw new Error('Invalid account field: ' + k);
+            if (!map[k]) {
+                throw new Error('Invalid account field: ' + k);
+            }
+
             return `${map[k]} = $${i + 1}`;
         }).join(', ');
 
         const values = [...keys.map(k => fields[k]), phone];
 
         await pool.query(
-            `UPDATE ${T} SET ${setClauses} WHERE phone = $${values.length}`,
+            `UPDATE ${T}
+             SET ${setClauses}
+             WHERE phone = $${values.length}`,
             values
         );
     }
@@ -279,7 +339,10 @@ function makeStore(T, B) {
     }
 
     async function removeAccount(phone) {
-        await pool.query(`DELETE FROM ${T} WHERE phone = $1`, [phone]);
+        await pool.query(
+            `DELETE FROM ${T} WHERE phone = $1`,
+            [phone]
+        );
     }
 
     async function resetAllAccounts() {
@@ -319,7 +382,10 @@ function makeStore(T, B) {
     }
 
     async function removeBadPasswordAccount(phone) {
-        await pool.query(`DELETE FROM ${B} WHERE phone = $1`, [phone]);
+        await pool.query(
+            `DELETE FROM ${B} WHERE phone = $1`,
+            [phone]
+        );
     }
 
     return {
@@ -342,8 +408,12 @@ const hotgames = makeStore('accounts', 'bad_password_accounts');
 
 function getZambiaTime() {
     const now = new Date();
-    const zambiaStr = now.toLocaleString('en-GB', { timeZone: TIMEZONE });
-    const [, timePart] = zambiaStr.split(', ');
+    const zambiaStr = now.toLocaleString(
+        'en-GB',
+        { timeZone: TIMEZONE }
+    );
+
+    const [datePart, timePart] = zambiaStr.split(', ');
     const [hours, minutes, seconds] = timePart.split(':').map(Number);
 
     return {
@@ -367,17 +437,13 @@ module.exports = {
     removeAccount: hotgames.removeAccount,
     resetAllAccounts: hotgames.resetAllAccounts,
     deleteAllAccounts: hotgames.deleteAllAccounts,
+
     getBadPasswordAccounts: hotgames.getBadPasswordAccounts,
     addBadPasswordAccount: hotgames.addBadPasswordAccount,
     removeBadPasswordAccount: hotgames.removeBadPasswordAccount,
 
     getZambiaTime,
     SEVEN_DAYS_MS,
-    FREE_ACCOUNT_LOCK_THRESHOLD,
-    LOCK_HOUR,
-    LOCK_MINUTE,
-    UNLOCK_HOUR,
-    UNLOCK_MINUTE,
     REMOVE_PASSWORD,
     HEARTBEAT_TIMEOUT_MS,
     TIMEZONE
