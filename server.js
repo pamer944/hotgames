@@ -1,11 +1,11 @@
 const express = require('express');
 const {
-    pool, initDB, hotgames,
+    pool, initDB, bwinners,
     getAccounts, getAccountByTabId,
     claimFreeAccount, reLoginForTab, updateAccount,
     addAccount, removeAccount, resetAllAccounts, deleteAllAccounts,
     getBadPasswordAccounts, addBadPasswordAccount, removeBadPasswordAccount,
-    getZambiaTime, SEVEN_DAYS_MS,
+    getZambiaTime,
     REMOVE_PASSWORD, HEARTBEAT_TIMEOUT_MS, TIMEZONE
 } = require('./accounts');
 
@@ -27,6 +27,7 @@ function pad(n) {
 }
 
 const HEARTBEAT_SILENCE_TIMEOUT_MS = 3 * 60 * 60 * 1000;
+const TWENTY_FOUR_HOURS_MS = 24 * 60 * 60 * 1000;
 
 app.post('/add-account', async (req, res) => {
     try {
@@ -36,12 +37,12 @@ app.post('/add-account', async (req, res) => {
             return res.json({ success: false, error: 'Phone and password required.' });
         }
 
-        const existing = (await hotgames.getAccounts()).some(a => a.phone === phone);
+        const existing = (await bwinners.getAccounts()).some(a => a.phone === phone);
         if (existing) {
             return res.json({ success: false, error: 'Account already exists.' });
         }
 
-        await hotgames.addAccount(phone, password);
+        await bwinners.addAccount(phone, password);
         res.json({ success: true });
 
     } catch (e) {
@@ -50,7 +51,7 @@ app.post('/add-account', async (req, res) => {
 });
 
 async function setupPool(name, base, store, alertsTable) {
-    // No time-based locking. Accounts are available at all hours.
+    // Accounts become available 24 hours after logout.
 
     setInterval(async () => {
         try {
@@ -61,7 +62,7 @@ async function setupPool(name, base, store, alertsTable) {
                 if (
                     acc.status === 'IN-USE' &&
                     acc.logoutTime &&
-                    (now - acc.logoutTime >= SEVEN_DAYS_MS)
+                    (now - acc.logoutTime >= TWENTY_FOUR_HOURS_MS)
                 ) {
                     await store.updateAccount(acc.phone, {
                         status: 'FREE',
@@ -533,7 +534,7 @@ async function setupPool(name, base, store, alertsTable) {
             res.send(`<!DOCTYPE html>
 <html>
 <head>
-<title>HOTGAMES - In Use</title>
+<title>BWINNERS - In Use</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -558,7 +559,7 @@ body{font-family:sans-serif;background:#04060a;padding:20px;min-height:100vh}
 <body>
 <div class="page">
 <div class="ph">
-<a href="${base}/" class="back">&#8592; HOTGAMES</a>
+<a href="${base}/" class="back">&#8592; BWINNERS</a>
 <div><div class="pt">In Use</div><div class="ps">${list.length} accounts</div></div>
 </div>
 <div class="sw"><input class="si" placeholder="Search..." oninput="filterRows(this.value)"></div>
@@ -615,7 +616,7 @@ updateHB();
                 .filter(a => a.status === 'IN-USE' && a.logoutTime)
                 .map(a => ({
                     phone: a.phone,
-                    freeAt: a.logoutTime + SEVEN_DAYS_MS,
+                    freeAt: a.logoutTime + TWENTY_FOUR_HOURS_MS,
                     logoutTimeStr: a.logoutTimeStr
                 }))
                 .sort((a, b) => a.freeAt - b.freeAt);
@@ -638,7 +639,7 @@ updateHB();
             res.send(`<!DOCTYPE html>
 <html>
 <head>
-<title>HOTGAMES - Waiting 7 days</title>
+<title>BWINNERS - Waiting 24 hours</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -663,8 +664,8 @@ body{font-family:sans-serif;background:#04060a;padding:20px;min-height:100vh}
 <body>
 <div class="page">
 <div class="ph">
-<a href="${base}/" class="back">&#8592; HOTGAMES</a>
-<div><div class="pt">Waiting 7 days</div><div class="ps">${list.length} accounts</div></div>
+<a href="${base}/" class="back">&#8592; BWINNERS</a>
+<div><div class="pt">Waiting 24 hours</div><div class="ps">${list.length} accounts</div></div>
 </div>
 <div class="sw"><input class="si" placeholder="Search..." oninput="filterRows(this.value)"></div>
 <div id="list">${rows}</div>
@@ -682,11 +683,10 @@ function updateCD() {
             el.textContent = 'Ready';
             el.style.color = '#3fb950';
         } else {
-            const d = Math.floor(diff / 86400000);
-            const h = Math.floor((diff % 86400000) / 3600000);
+            const h = Math.floor(diff / 3600000);
             const m = Math.floor((diff % 3600000) / 60000);
             const s = Math.floor((diff % 60000) / 1000);
-            el.textContent = 'Free in: ' + d + 'd ' + pad(h) + 'h ' + pad(m) + 'm ' + pad(s) + 's';
+            el.textContent = 'Free in: ' + pad(h) + 'h ' + pad(m) + 'm ' + pad(s) + 's';
         }
     });
 }
@@ -743,7 +743,7 @@ updateCD();
         return `<!DOCTYPE html>
 <html>
 <head>
-<title>HOTGAMES - ${title}</title>
+<title>BWINNERS - ${title}</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
@@ -779,7 +779,7 @@ body{font-family:sans-serif;background:#04060a;padding:20px;min-height:100vh}
 <body>
 <div class="page">
 <div class="ph">
-<a href="${basePath}/" class="back">&#8592; HOTGAMES</a>
+<a href="${basePath}/" class="back">&#8592; BWINNERS</a>
 <div><div class="pt">${title}</div><div class="ps">${subtitle}</div></div>
 </div>
 <div class="sw"><input class="si" placeholder="Search..." oninput="filterRows(this.value)"></div>
@@ -889,7 +889,7 @@ function filterRows(q) {
 </html>`;
     }
 
-    // MAIN HOTGAMES DASHBOARD
+    // MAIN BWINNERS DASHBOARD
 
     app.get(base || '/', async (req, res) => {
         try {
@@ -902,7 +902,7 @@ function filterRows(q) {
             res.send(`<!DOCTYPE html>
 <html>
 <head>
-<title>HOTGAMES - Account Dashboard</title>
+<title>BWINNERS - Account Dashboard</title>
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
 <style>
@@ -964,7 +964,7 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
 <body>
 <div class="db">
 <div class="top-bar">
-    <div class="db-title">&#127918; HOTGAMES - Location 3</div>
+    <div class="db-title">&#127918; BWINNERS - Location 4</div>
     <div id="pill" class="pill pill-live"><div class="dot"></div><span id="pill-text">Live</span></div>
 </div>
 
@@ -982,7 +982,7 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
         <a href="${base}/view/inuse" class="vbtn">View <span class="vcnt" id="cnt-inuse">${inUseAccounts.length}</span></a>
     </div>
     <div class="box box-waiting">
-        <div class="bl c-waiting">&#9203; Waiting 7 days</div>
+        <div class="bl c-waiting">&#9203; Waiting 24 hours</div>
         <div class="bn c-waiting" id="num-waiting">${waitingAccounts.length}</div>
         <div class="bd d-waiting">Until account becomes free</div>
         <a href="${base}/view/waiting" class="vbtn">View <span class="vcnt" id="cnt-waiting">${waitingAccounts.length}</span></a>
@@ -990,7 +990,7 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
 </div>
 
 <div class="add-box">
-    <div class="add-title">&#43; Add HOTGAMES account</div>
+    <div class="add-title">&#43; Add BWINNERS account</div>
     <div class="add-row">
         <input class="add-input" id="inp-phone" placeholder="Phone number" type="text">
         <input class="add-input" id="inp-pass" placeholder="Password" type="text">
@@ -1021,7 +1021,7 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
     <div id="note-date" style="font-size:11px;color:#94a3b8;margin-bottom:20px;"></div>
     <hr style="border:none;border-top:2px solid #e2e8f0;margin-bottom:16px;">
     <div id="note-rows"></div>
-    <div style="margin-top:20px;font-size:10px;color:#cbd5e1;text-align:center;">HOTGAMES - Location 3</div>
+    <div style="margin-top:20px;font-size:10px;color:#cbd5e1;text-align:center;">BWINNERS - Location 4</div>
 </div>
 
 <style>
@@ -1193,13 +1193,13 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
 }
 
 initDB().then(async function() {
-    await setupPool('HOTGAMES', '', hotgames, 'alerts');
+    await setupPool('BWINNERS', '', bwinners, 'alerts');
 
     app.listen(PORT, () => {
-        console.log('HOTGAMES active on port ' + PORT + ' -- Location 3 -- Africa/Lusaka');
+        console.log('BWINNERS active on port ' + PORT + ' -- Location 4 -- Africa/Lusaka');
     });
 
 }).catch(function(err) {
-    console.error('Failed to initialize HOTGAMES database:', err);
+    console.error('Failed to initialize BWINNERS database:', err);
     process.exit(1);
 });
