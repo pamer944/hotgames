@@ -170,10 +170,7 @@ function makeStore(T, B) {
         };
     }
 
-    // Re-login: release whatever this tab currently holds and hand it a NEW
-    // free account. A per-tab advisory lock serialises overlapping calls so two
-    // requests can't each grab a different account; the release step clears ALL
-    // accounts held by the tab, which also heals any earlier double-claim.
+    // Move the previous account to waiting and claim another atomically.
     async function reLoginForTab(tabId, heartbeatNow, logoutTimeStr) {
         const client = await pool.connect();
 
@@ -181,25 +178,34 @@ function makeStore(T, B) {
             await client.query('BEGIN');
 
             if (tabId) {
-                // Serialise every request for this tab id.
-                await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [String(tabId)]);
-
-                // Release every live account this tab is holding -> move to waiting.
-                await client.query(
-                    `UPDATE ${T}
-                     SET logout_time = $2,
-                         logout_time_str = $3,
-                         last_heartbeat = NULL,
-                         in_use_since = NULL,
-                         tab_id = NULL
+                const { rows: oldRows } = await client.query(
+                    `SELECT phone FROM ${T}
                      WHERE tab_id = $1
                      AND status = 'IN-USE'
-                     AND logout_time IS NULL`,
-                    [tabId, heartbeatNow, logoutTimeStr + ' (re-login)']
+                     AND logout_time IS NULL
+                     LIMIT 1
+                     FOR UPDATE SKIP LOCKED`,
+                    [tabId]
                 );
+
+                if (oldRows.length > 0) {
+                    await client.query(
+                        `UPDATE ${T}
+                         SET logout_time = $2,
+                             logout_time_str = $3,
+                             last_heartbeat = NULL,
+                             in_use_since = NULL,
+                             tab_id = NULL
+                         WHERE phone = $1`,
+                        [
+                            oldRows[0].phone,
+                            heartbeatNow,
+                            logoutTimeStr + ' (re-login)'
+                        ]
+                    );
+                }
             }
 
-            // Claim one fresh FREE account.
             const { rows: newRows } = await client.query(
                 `SELECT phone, password
                  FROM ${T}
