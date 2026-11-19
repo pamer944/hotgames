@@ -170,7 +170,11 @@ function makeStore(T, B) {
         };
     }
 
-    // Move the previous account to waiting and claim another atomically.
+    // Give this tab its account. Safe against duplicate/overlapping requests:
+    // an advisory lock serialises all calls for the same tab, and if the tab
+    // already holds a live account we RETURN that one instead of claiming a
+    // second. Any extra accounts left on the tab by an earlier race are pushed
+    // to waiting so the tab is left holding exactly one.
     async function reLoginForTab(tabId, heartbeatNow, logoutTimeStr) {
         const client = await pool.connect();
 
@@ -178,34 +182,40 @@ function makeStore(T, B) {
             await client.query('BEGIN');
 
             if (tabId) {
-                const { rows: oldRows } = await client.query(
-                    `SELECT phone FROM ${T}
+                // Serialise every request for this tab id.
+                await client.query('SELECT pg_advisory_xact_lock(hashtext($1))', [String(tabId)]);
+
+                const { rows: held } = await client.query(
+                    `SELECT phone, password FROM ${T}
                      WHERE tab_id = $1
                      AND status = 'IN-USE'
                      AND logout_time IS NULL
-                     LIMIT 1
-                     FOR UPDATE SKIP LOCKED`,
+                     ORDER BY in_use_since ASC NULLS LAST
+                     FOR UPDATE`,
                     [tabId]
                 );
 
-                if (oldRows.length > 0) {
-                    await client.query(
-                        `UPDATE ${T}
-                         SET logout_time = $2,
-                             logout_time_str = $3,
-                             last_heartbeat = NULL,
-                             in_use_since = NULL,
-                             tab_id = NULL
-                         WHERE phone = $1`,
-                        [
-                            oldRows[0].phone,
-                            heartbeatNow,
-                            logoutTimeStr + ' (re-login)'
-                        ]
-                    );
+                if (held.length > 0) {
+                    // Keep the first account; release any extras from an earlier double-claim.
+                    for (let i = 1; i < held.length; i++) {
+                        await client.query(
+                            `UPDATE ${T}
+                             SET logout_time = $2,
+                                 logout_time_str = $3,
+                                 last_heartbeat = NULL,
+                                 in_use_since = NULL,
+                                 tab_id = NULL
+                             WHERE phone = $1`,
+                            [held[i].phone, heartbeatNow, logoutTimeStr + ' (dup cleared)']
+                        );
+                    }
+
+                    await client.query('COMMIT');
+                    return { phone: held[0].phone, password: held[0].password };
                 }
             }
 
+            // Tab holds no live account -> claim one FREE account.
             const { rows: newRows } = await client.query(
                 `SELECT phone, password
                  FROM ${T}
@@ -305,7 +315,8 @@ function makeStore(T, B) {
             status: 'status',
             inUseSince: 'in_use_since',
             tabId: 'tab_id',
-            freedAt: 'freed_at'
+            freedAt: 'freed_at',
+            password: 'password'
         };
 
         const keys = Object.keys(fields);
