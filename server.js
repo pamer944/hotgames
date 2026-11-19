@@ -1027,6 +1027,8 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
 .box-waiting{background:#120c22;border:1.5px solid #2e1f55}
 .box-total{background:#0d1420;border:1.5px solid #30363d}
 .c-total{color:#e6edf3}.d-total{color:#8b949e}
+.box-bad{background:#1a0f0a;border:1.5px solid #4a1f0a}
+.c-bad{color:#fb923c}.d-bad{color:#7a3a10}
 .bl{font-size:9px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
 .c-free{color:#3fb950}.c-inuse{color:#58a6ff}.c-waiting{color:#c4b5fd}
 .bn{font-size:48px;font-weight:500;line-height:1;letter-spacing:-2px;margin-bottom:6px}
@@ -1101,6 +1103,13 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
     <div class="bn c-total" id="num-total">${freeAccounts.length + inUseAccounts.length + waitingAccounts.length}</div>
     <div class="bd d-total">All numbers in this pool</div>
     <a href="${base}/view/all" class="vbtn">View all <span class="vcnt" id="cnt-total">${freeAccounts.length + inUseAccounts.length + waitingAccounts.length}</span></a>
+</div>
+
+<div class="box box-bad" id="bad-box" style="margin-bottom:16px">
+    <div class="bl c-bad">&#9888;&#65039; Invalid login</div>
+    <div class="bn c-bad" id="num-bad">${badPasswordAccounts.length}</div>
+    <div class="bd d-bad">Phone or password invalid</div>
+    <a href="${base}/view/bad" class="vbtn">View <span class="vcnt" id="cnt-bad">${badPasswordAccounts.length}</span></a>
 </div>
 
 <div class="add-box">
@@ -1191,6 +1200,9 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
                 var total = (d.free || 0) + (d.inUse || 0) + (d.waiting || 0);
                 var nt = document.getElementById('num-total'); if (nt) nt.textContent = total;
                 var ct = document.getElementById('cnt-total'); if (ct) ct.textContent = total;
+
+                var nb = document.getElementById('num-bad'); if (nb) nb.textContent = d.badPassword;
+                var cb = document.getElementById('cnt-bad'); if (cb) cb.textContent = d.badPassword;
             })
             .catch(() => {});
     }
