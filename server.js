@@ -38,7 +38,7 @@ app.post('/add-account', async (req, res) => {
 
         phone = String(phone).trim().replace(/\s+/g, '');
         if (phone.startsWith('0')) phone = phone.substring(1);
-        if (!/^[579]\d{8}$/.test(phone)) {
+        if (!/^\d{9}$/.test(phone)) {
             return res.json({ success: false, error: 'Phone must be 9 digits, e.g. 975232003.' });
         }
 
@@ -810,6 +810,36 @@ updateCD();
         }
     });
 
+    app.get(base + '/view/all', async (req, res) => {
+        try {
+            const accounts = await store.getAccounts();
+
+            const list = accounts.slice().sort((a, b) => String(a.phone).localeCompare(String(b.phone)));
+
+            const rows = list.map((r, i) =>
+                `<div class="row" data-phone="${r.phone}">
+                    <div class="rn">${i + 1}.</div>
+                    <div class="ri">
+                        <div class="rp">${r.phone}</div>
+                        <div class="rs">${r.password}</div>
+                    </div>
+                    <button class="rb" onclick="store.removeAccount('${r.phone}')">Remove</button>
+                </div>`
+            ).join('') || '<div class="empty">No accounts</div>';
+
+            res.send(listPage(
+                'All Numbers',
+                list.length + ' total',
+                rows,
+                true,
+                base
+            ));
+
+        } catch (e) {
+            res.status(500).send('Error');
+        }
+    });
+
     function listPage(title, subtitle, rows, showRemove, basePath) {
         const removeEndpoint = title === 'Bad Password'
             ? 'remove-bad-password'
@@ -995,6 +1025,8 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
 .box-free{background:#0a1a0f;border:1.5px solid #1a4a27}
 .box-inuse{background:#080f1f;border:1.5px solid #1a2f55}
 .box-waiting{background:#120c22;border:1.5px solid #2e1f55}
+.box-total{background:#0d1420;border:1.5px solid #30363d}
+.c-total{color:#e6edf3}.d-total{color:#8b949e}
 .bl{font-size:9px;font-weight:600;letter-spacing:1px;text-transform:uppercase;margin-bottom:10px}
 .c-free{color:#3fb950}.c-inuse{color:#58a6ff}.c-waiting{color:#c4b5fd}
 .bn{font-size:48px;font-weight:500;line-height:1;letter-spacing:-2px;margin-bottom:6px}
@@ -1062,6 +1094,13 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
         <div class="bd d-waiting">Until account becomes free</div>
         <a href="${base}/view/waiting" class="vbtn">View <span class="vcnt" id="cnt-waiting">${waitingAccounts.length}</span></a>
     </div>
+</div>
+
+<div class="box box-total" id="total-box" style="margin-bottom:16px">
+    <div class="bl c-total">&#8721; Total numbers</div>
+    <div class="bn c-total" id="num-total">${freeAccounts.length + inUseAccounts.length + waitingAccounts.length}</div>
+    <div class="bd d-total">All numbers in this pool</div>
+    <a href="${base}/view/all" class="vbtn">View all <span class="vcnt" id="cnt-total">${freeAccounts.length + inUseAccounts.length + waitingAccounts.length}</span></a>
 </div>
 
 <div class="add-box">
@@ -1148,6 +1187,10 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
                 document.getElementById('cnt-free').textContent = d.free;
                 document.getElementById('cnt-inuse').textContent = d.inUse;
                 document.getElementById('cnt-waiting').textContent = d.waiting;
+
+                var total = (d.free || 0) + (d.inUse || 0) + (d.waiting || 0);
+                var nt = document.getElementById('num-total'); if (nt) nt.textContent = total;
+                var ct = document.getElementById('cnt-total'); if (ct) ct.textContent = total;
             })
             .catch(() => {});
     }
@@ -1174,7 +1217,7 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
 
         phone = phone.replace(/\\s+/g, '');
         if (phone.charAt(0) === '0') phone = phone.substring(1);
-        if (!/^[579]\\d{8}$/.test(phone)) {
+        if (!/^\\d{9}$/.test(phone)) {
             showMsg('Phone must be 9 digits, e.g. 975232003', false);
             return;
         }
