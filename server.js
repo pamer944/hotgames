@@ -58,6 +58,11 @@ app.post('/add-account', async (req, res) => {
 async function setupPool(name, base, store, alertsTable) {
     // No time-based locking. Accounts are available at all hours.
 
+    // Per-tab cooldown: a tab cannot be handed a new number more than
+    // once every 5 seconds (stops double-assignment from rapid repeats).
+    const CLAIM_COOLDOWN_MS = 5000;
+    const lastClaimByTab = {};
+
     setInterval(async () => {
         try {
             const accounts = await store.getAccounts();
@@ -252,6 +257,32 @@ async function setupPool(name, base, store, alertsTable) {
                 });
             }
 
+            // Cooldown: if this tab asked within the last 5 seconds, do NOT
+            // claim another account. Hand back the one it already holds.
+            const nowMs = Date.now();
+            const last = lastClaimByTab[tabId] || 0;
+
+            if (nowMs - last < CLAIM_COOLDOWN_MS) {
+                const held = await store.getAccountByTabId(tabId);
+
+                if (held) {
+                    return res.json({
+                        success: true,
+                        phone: held.phone,
+                        password: held.password
+                    });
+                }
+
+                return res.json({
+                    success: false,
+                    error: 'Please wait a few seconds.'
+                });
+            }
+
+            // Mark the claim time BEFORE awaiting, so a request that arrives a
+            // moment later is blocked by the cooldown above.
+            lastClaimByTab[tabId] = nowMs;
+
             const { hour, minute } = getZambiaTime();
 
             const claimed = await store.reLoginForTab(
@@ -267,6 +298,9 @@ async function setupPool(name, base, store, alertsTable) {
                     password: claimed.password
                 });
             }
+
+            // Nothing claimed -> let them retry without waiting the full cooldown.
+            lastClaimByTab[tabId] = 0;
 
             return res.json({
                 success: false,
