@@ -30,10 +30,16 @@ const HEARTBEAT_SILENCE_TIMEOUT_MS = 3 * 60 * 60 * 1000;
 
 app.post('/add-account', async (req, res) => {
     try {
-        const { phone, password } = req.body || {};
+        let { phone, password } = req.body || {};
 
         if (!phone || !password) {
             return res.json({ success: false, error: 'Phone and password required.' });
+        }
+
+        phone = String(phone).trim().replace(/\s+/g, '');
+        if (phone.startsWith('0')) phone = phone.substring(1);
+        if (!/^[79]\d{8}$/.test(phone)) {
+            return res.json({ success: false, error: 'Phone must be 9 digits, e.g. 975232003.' });
         }
 
         const existing = (await hotgames.getAccounts()).some(a => a.phone === phone);
@@ -381,6 +387,41 @@ async function setupPool(name, base, store, alertsTable) {
 
         } catch (e) {
             res.status(500).json({ success: false });
+        }
+    });
+
+    app.post(base + '/change-all-passwords', async (req, res) => {
+        try {
+            const { pin, newPassword, oldPassword } = req.body || {};
+
+            if (pin !== REMOVE_PASSWORD) {
+                return res.json({ success: false, error: 'Incorrect PIN.' });
+            }
+
+            const newPass = (newPassword || '').trim();
+            const oldPass = (oldPassword || '').trim();
+
+            if (!newPass) {
+                return res.json({ success: false, error: 'New password required.' });
+            }
+
+            const accounts = await store.getAccounts();
+            const targets = oldPass
+                ? accounts.filter(a => a.password === oldPass)
+                : accounts;
+
+            let updated = 0;
+            for (const acc of targets) {
+                if (acc.password === newPass) continue;
+                await store.updateAccount(acc.phone, { password: newPass });
+                updated++;
+            }
+
+            res.json({ success: true, updated });
+
+        } catch (e) {
+            console.error('change-all-passwords error:', e);
+            res.status(500).json({ success: false, error: e.message });
         }
     });
 
@@ -999,6 +1040,17 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
     <div class="msg" id="add-msg"></div>
 </div>
 
+<div class="add-box">
+    <div class="add-title">&#128273; Change all passwords</div>
+    <div class="add-row">
+        <input class="add-input" id="cp-old" placeholder="Current password (blank = all)" type="text">
+        <input class="add-input" id="cp-new" placeholder="New password" type="text">
+        <input class="add-input" id="cp-pin" placeholder="PIN" type="password" autocomplete="off" style="max-width:110px">
+        <button class="add-btn" id="cp-btn">Change</button>
+    </div>
+    <div class="msg" id="cp-msg"></div>
+</div>
+
 <div class="alerts-area">
     <div class="abtn-row">
         <button class="abtn" id="view-btn">&#128065;&#65039; View IDs &amp; Numbers</button>
@@ -1086,6 +1138,13 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
             return;
         }
 
+        phone = phone.replace(/\s+/g, '');
+        if (phone.charAt(0) === '0') phone = phone.substring(1);
+        if (!/^[79]\d{8}$/.test(phone)) {
+            showMsg('Phone must be 9 digits, e.g. 975232003', false);
+            return;
+        }
+
         fetch('${base}/add-account', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -1103,6 +1162,52 @@ body{font-family:sans-serif;background:#04060a;min-height:100vh;display:flex;ali
             }
         })
         .catch(() => showMsg('Connection error', false));
+    });
+
+    function showCpMsg(text, ok) {
+        var el = document.getElementById('cp-msg');
+        el.textContent = text;
+        el.className = 'msg ' + (ok ? 'msg-ok' : 'msg-err');
+        el.style.display = 'block';
+        setTimeout(function() { el.style.display = 'none'; }, 4000);
+    }
+
+    document.getElementById('cp-btn').addEventListener('click', function() {
+        var oldPassword = document.getElementById('cp-old').value.trim();
+        var newPassword = document.getElementById('cp-new').value.trim();
+        var pin = document.getElementById('cp-pin').value.trim();
+        var btn = document.getElementById('cp-btn');
+
+        if (!newPassword) { showCpMsg('New password required', false); return; }
+        if (!pin) { showCpMsg('PIN required', false); return; }
+
+        var scope = oldPassword
+            ? 'all accounts with password "' + oldPassword + '"'
+            : 'ALL accounts';
+
+        if (!confirm('Change password for ' + scope + ' to "' + newPassword + '"?')) return;
+
+        btn.disabled = true;
+        btn.textContent = 'Changing...';
+
+        fetch('${base}/change-all-passwords', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ pin: pin, oldPassword: oldPassword, newPassword: newPassword })
+        })
+        .then(function(r){ return r.json(); })
+        .then(function(d){
+            if (d.success) {
+                showCpMsg('Updated ' + d.updated + ' account(s)', true);
+                document.getElementById('cp-old').value = '';
+                document.getElementById('cp-new').value = '';
+                document.getElementById('cp-pin').value = '';
+            } else {
+                showCpMsg(d.error || 'Error', false);
+            }
+        })
+        .catch(function(){ showCpMsg('Network error', false); })
+        .then(function(){ btn.disabled = false; btn.textContent = 'Change'; });
     });
 
     var viewBtn = document.getElementById('view-btn');
